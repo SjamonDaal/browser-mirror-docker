@@ -25,7 +25,7 @@ mkdir bm-server && cd bm-server
  3) Login as root and run the installer:
 ```
 sudo -s # Login as root if needed
-source /dev/stdin <<< "$(curl -s https://raw.githubusercontent.com/SjamonDaal/browser-mirror/master/installer)"
+source /dev/stdin <<< "$(curl -s https://raw.githubusercontent.com/SjamonDaal/browser-mirror-docker/master/installer)"
 ```
  4) Run `bm server start` to start the websocket server. You can give it a port number if you want it to run on a port other than 1337 (eg, `bm server start 1223`)
  5) Run `bm server stop` to stop the server
