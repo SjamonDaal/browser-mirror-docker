@@ -1,0 +1,35 @@
+{
+  "name": "browser-mirror-docker",
+  "version": "1.2.7",
+  "description": "Lets a user open a webpage on one browser and control that webpage in other browsers, on other computers as a light-weight alternative to screensharing.",
+  "main": "bm-client.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SjamonDaal/browser-mirror-docker.git"
+  },
+  "keywords": [
+    "mirror",
+    "browser",
+    "websockets",
+    "screen sharing"
+  ],
+  "author": "pamblam",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/SjamonDaal/browser-mirror-docker/issues"
+  },
+  "homepage": "https://github.com/SjamonDaal/browser-mirror-docker#readme",
+  "dependencies": {
+    "dotenv": "^6.0.0",
+    "http": "0.0.0",
+    "https": "^1.0.0",
+    "websocket": "^1.0.26"
+  },
+  "devDependencies": {
+    "grunt": "^1.0.2",
+    "grunt-string-replace": "^1.3.1"
+  }
+}

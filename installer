@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+
+if [[ $EUID -ne 0 ]]; then
+  echo "  This script must be run as root" 
+  echo "  Please run 'sudo -s' then try again." 
+  exit 1
+fi
+
+HERE=$(pwd)
+
+clear
+echo "Installing Browser-Mirror";
+
+echo -ne '#####                     (33%) Initiating directory    \r'
+sleep .1
+npm init -y &>/dev/null
+
+echo -ne '#############             (66%) Downloading dependencies\r'
+sleep .1
+npm install browser-mirror &>/dev/null
+
+echo -ne '##################        (75%) Installing              \r'
+sleep .1
+mv ./node_modules/browser-mirror/bm-server ./bm-server 
+mv ./node_modules/browser-mirror/bm ./bm
+chmod +x bm-server
+chmod +x bm
+
+echo -ne '#####################     (80%) Installing manual       \r'
+sleep .1
+if [ -d /usr/local/share/man/man1/ ]; then
+	cp ./node_modules/browser-mirror/bm.1 /usr/local/share/man/man1/
+    gzip /usr/local/share/man/man1/bm.1
+elif [ -d /usr/share/man/man1 ]; then
+    cp ./node_modules/browser-mirror/bm.1 /usr/share/man/man1
+    gzip /usr/share/man/man1/bm.1
+fi
+
+[ -x "$(command -v mandb)" ] && mandb &>/dev/null
+
+echo -ne '######################    (90%) Setting PATH            \r'
+sleep .1
+if [ -f /etc/profile ]; then
+	printf '%s%s%s\n%s\n' 'export PATH="$PATH:' $HERE '"' "$(cat /etc/profile)" >/etc/profile
+	source /etc/profile
+fi
+
+echo -ne '########################  (95%) Creating logs           \r'
+sleep .1
+touch logs.txt && chmod 777 logs.txt
+touch .env && chmod 777 .env
+echo "KEY=" >> .env
+echo "CERT=" >> .env
+echo "CA=" >> .env
+
+echo -ne '######################### (100%) Done                   \n'
+

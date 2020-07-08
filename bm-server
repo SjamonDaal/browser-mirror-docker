@@ -1,0 +1,276 @@
+#!/usr/bin/env node
+
+process.title = 'bm-server';
+var webSocketServer = require('websocket').server;
+require('dotenv').config();
+var http = require(process.env.KEY && process.env.CERT ? 'https' : 'http');
+const fs = require('fs');
+const log=str=>console.log(`[${new Date().toLocaleString()}] - ${str}`);
+
+// if a port number is passedinto the command, use that, else default to 1337
+var port = (process.argv[2]||"").trim() || 1337;
+
+var sessions = {};
+
+var server;
+if(process.env.KEY && process.env.CERT){
+	var opts = {
+		key: fs.readFileSync(process.env.KEY),
+		cert: fs.readFileSync(process.env.CERT),
+	};
+	if(process.env.CA) opts.ca = process.env.CA
+	server = http.createServer(opts, function(request, response){});
+}else{
+	server = http.createServer(function(request, response){});
+}
+  
+
+server.listen(port, function(){
+	log(`Server active on port ${port}`);
+});
+
+var wsServer = new webSocketServer({
+	httpServer: server
+});
+
+// Given an array of objects with w and h values will return 
+// a new object with the minimum values
+const getMinDims = d => d.reduce((acc, cur)=>{
+	if(!acc.w || acc.w > cur.w) acc.w = cur.w;
+	if(!acc.h || acc.h > cur.h) acc.h = cur.h;
+	return acc;
+}, {w:0, h:0});
+
+// Given an array of objects with w and h values (d),
+// an object that matches at least one of the objects in the array (c),
+// and a new object with a w and h value (n),
+// will replace c with n in the array d and return it
+const replaceValue  = (d, c, n) => d.reduce((a, i)=>{
+	if(i.w == c.w && i.h == c.h) i = n;
+	a.push(i);
+	return a;
+}, []);
+
+wsServer.on('request', function (request) {
+	var connection = request.accept(null, request.origin);	
+	var role, session, index, myDims, browser;
+	
+	const broadcastSessionUpdate = (msg)=>{
+		[session.master, ...session.slaves].forEach(con=>{
+			if(!con) return;
+			con.sendUTF(JSON.stringify({
+				action: 'session_update', 
+				slaves: session.slaves.length,
+				members: session.master ? session.slaves.length+1 : session.slaves.length,
+				session_id: session.id,
+				started: session.started,
+				message: msg || ""
+			}));
+		});
+	};
+	
+	connection.on('message', function (message) {
+		var data = JSON.parse(message.utf8Data);
+		switch(data.action){
+			case "init_session":
+				if(data.role === 'master'){
+					if(!sessions[data.sessionid]) sessions[data.sessionid] = {id:data.sessionid, serverBrowser:"", master:null, slaves:[], started:false, forceBrowser:0, dimensions: {d:[], report_cnt:0, ready_cnt:0}};
+					session = sessions[data.sessionid];
+					if(!!session.master && connection){
+						connection.sendUTF(JSON.stringify({
+							action: 'session_error', 
+							message: 'There is already a master assigned for this session.'
+						}));
+					}
+					
+					session.master = connection;
+					role = 'master';
+					
+					broadcastSessionUpdate('Leader has joined session.');
+					browser = data.browser;
+					session.serverBrowser = data.browser;
+					session.forceBrowser = data.forceBrowser;
+				}else{
+					
+					if(!sessions[data.sessionid] && connection){
+						log('Attempted to join session afer it has ended.');
+						connection.sendUTF(JSON.stringify({
+							action: 'session_error', 
+							message: 'This session has already ended.'
+						}));
+						return;
+					}
+					
+					session = sessions[data.sessionid];
+					if(session.started && connection){
+						log('Attempted to join session afer it has started.');
+						connection.sendUTF(JSON.stringify({
+							action: 'session_error', 
+							message: 'This session has already started. It\'s too late to join.'
+						}));
+						return;
+					}
+				
+					if(session.forceBrowser > 0 && session.serverBrowser !== data.browser){
+						if(session.forceBrowser == 1){
+							log('Attempted to join session with wrong browser: '+data.browser+", "+session.serverBrowser+" is required.");
+							if(connection) connection.sendUTF(JSON.stringify({
+								action: 'session_error', 
+								message: `You are using ${data.browser}, but this session requires you to use ${session.serverBrowser}. Please try again in ${session.serverBrowser}.`
+							}));
+							broadcastSessionUpdate(`Member attempted to join session using ${data.browser}... Member is switching to ${session.serverBrowser} now.`);
+						}else if(session.forceBrowser == 2){
+							log('Confirming join session with browser: '+data.browser+", "+session.serverBrowser+" is recommended.");
+							if(connection) connection.sendUTF(JSON.stringify({
+								action: 'session_confirm', 
+								confirm_action: 'browser_type',
+								message: `You are using ${data.browser}, but this session recommends that you use ${session.serverBrowser}. Would you like to continue in ${data.browser} anyway?`
+							}));
+							broadcastSessionUpdate(`Member attempted to join session using ${data.browser}... Confirming.`);
+						}
+						return;
+					}
+				
+					index = session.slaves.length;
+					session.slaves.push(connection);
+					role = 'slave';
+					
+					broadcastSessionUpdate('Member has joined session.');
+				}
+				log(`${role} joined session: ${data.sessionid}`);
+				break;
+			
+			case "respond_confirm":
+				switch(data.confirm_action){
+					case "browser_type":
+						if(!data.confirm && connection){
+							log('Failed to confirm browser usage.');
+							connection.sendUTF(JSON.stringify({
+								action: 'session_error', 
+								message: `Failed to confirm browser usage.`
+							}));
+						}else{
+							log('Confirmed use of unrecommended browser.');
+							index = session.slaves.length;
+							session.slaves.push(connection);
+							role = 'slave';
+							broadcastSessionUpdate('Member has joined session.');
+						}
+						break;
+				}
+				break;
+			
+			case "set_state":
+				if(role !== 'master') break;
+				session.slaves.forEach(slave=>{
+					if(null === slave) return;
+					slave.sendUTF(JSON.stringify({
+						action: 'set_state', 
+						state: data.state
+					}));
+				});
+				break;
+				
+			case "set_passthru_state":
+				if(role !== 'master') break;
+				session.slaves.forEach(slave=>{
+					if(null === slave) return;
+					slave.sendUTF(JSON.stringify({
+						action: 'set_passthru_state', 
+						state: data.state
+					}));
+				});
+				break;
+			
+			case 'resize_ready':
+				session.dimensions.ready_cnt++;
+				var total_members = session.slaves.length+1;
+				if(total_members === session.dimensions.ready_cnt && session.master){
+					session.master.sendUTF(JSON.stringify({
+						action: 'all_members_resized', 
+					}));
+				}
+				break;
+			
+			case 'resize_all':
+				session.dimensions.d = replaceValue(session.dimensions.d, myDims, data.dimensions);
+				myDims = data.dimensions;
+				var minDims = getMinDims(session.dimensions.d);
+				if(minDims.w == data.dimensions.w || minDims.h == data.dimensions.h){
+					var data = JSON.stringify({
+						action: 'resize', 
+						dimensions: {
+							h: minDims.h,
+							w: minDims.w
+						}
+					});
+					if(session.master) session.master.sendUTF(data);
+					session.slaves.forEach(slave=>{
+						if(null === slave) return;
+						slave.sendUTF(data);
+					});
+				}
+				break;
+			
+			case 'report_dims':
+				myDims = data.dimensions;
+				session.dimensions.d.push(myDims);
+				session.dimensions.report_cnt++;
+				if(session.slaves.length === session.dimensions.report_cnt){
+					var minDims = getMinDims(session.dimensions.d);
+					var data = JSON.stringify({
+						action: 'init_browser_resize', 
+						dimensions: {
+							h: minDims.h,
+							w: minDims.w
+						}
+					});
+					if(session.master) session.master.sendUTF(data);
+					session.slaves.forEach(slave=>{
+						if(null === slave) return;
+						slave.sendUTF(data);
+					});
+				}
+				break;
+			
+			case "sync_dims":
+				if(role !== 'master') break;
+				myDims = data.dimensions;
+				session.dimensions.d.push(myDims);
+				session.slaves.forEach(slave=>{
+					if(null === slave) return;
+					slave.sendUTF(JSON.stringify({
+						action: 'request_dims'
+					}));
+				});
+				break;
+			
+			case "start_session":
+				session.started = true;
+				broadcastSessionUpdate('Session has started.');
+				break;
+		}
+	});
+	
+	connection.on('close', function(connection){
+		if(!session) return;
+		if(role == 'slave'){
+			session.slaves[index] = null;
+			broadcastSessionUpdate('Member has left session.');
+			log(`Member left session: ${session.id}`);
+		}else{
+			session.master = null;
+			session.slaves.forEach(slave=>{
+				if(null === slave) return;
+				slave.sendUTF(JSON.stringify({
+					action: 'session_error', 
+					message: 'This session has ended.'
+				}));
+			});
+			log(`${role} left session: ${session.id}`);
+			log(`${session.id} has ended`);
+			delete sessions[session.id];
+		}
+	});
+	
+});

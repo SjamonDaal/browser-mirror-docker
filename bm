@@ -1,0 +1,252 @@
+#!/usr/bin/env bash
+
+HERE="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PWD=$(pwd)
+SUBCOMMAND=$1
+OPERATIVE=$2 
+FILE=$3
+if [ "$SUBCOMMAND" = "set" ]; then
+
+  ##############################################################################
+  ######################### bm set key/certificate/ca ##########################
+  ##############################################################################
+
+	if [ "$OPERATIVE" = "key" ]; then
+	
+		if [ -z ${FILE+x} ]; then 
+			echo "You must provide full path to key.";
+			exit 1;
+		elif [ ! -f "$FILE" ]; then
+			echo "File is not found: $FILE"
+			exit 1;
+		fi
+		
+		awk '{ if (NR == 1) print "'"KEY=$FILE"'"; else print $0}' "$HERE/.env" > "$HERE/temp"
+		cat "$HERE/temp" > "$HERE/.env"
+		rm -f "$HERE/temp"
+
+	elif [ "$OPERATIVE" = "certificate" ]; then
+
+		if [ -z ${FILE+x} ]; then 
+			echo "You must provide full path to certificate.";
+			exit 1;
+		elif [ ! -f "$FILE" ]; then
+			echo "File is not found: $FILE"
+			exit 1;
+		fi
+		
+		awk '{ if (NR == 2) print "'"CERT=$FILE"'"; else print $0}' "$HERE/.env" > "$HERE/temp"
+		cat "$HERE/temp" > "$HERE/.env"
+		rm -f "$HERE/temp"
+
+	elif [ "$OPERATIVE" = "ca" ]; then
+		
+		if [ -z ${FILE+x} ]; then 
+			echo "You must provide full path to certificate.";
+			exit 1;
+		elif [ ! -f "$FILE" ]; then
+			echo "File is not found: $FILE"
+			exit 1;
+		fi
+		
+		awk '{ if (NR == 3) print "'"CA=$FILE"'"; else print $0}' "$HERE/.env" > "$HERE/temp"
+		cat "$HERE/temp" > "$HERE/.env"
+		rm -f "$HERE/temp"
+
+	else
+		echo "  unknown option: $OPERATIVE"
+		echo "  try 'bm --help' for usage help."
+		exit 1;
+	fi
+
+elif [ "$SUBCOMMAND" = "uninstall" ]; then
+
+  ##############################################################################
+  ################################ bm uninstall ################################
+  ##############################################################################
+
+  if [[ $EUID -ne 0 ]]; then
+    echo "  This script must be run as root" 
+    exit 1
+  fi
+  [ -f /etc/profile ] && grep -v "$HERE" /etc/profile > temp && mv temp /etc/profile
+  [ -f "/usr/local/share/man/man1/bm.1" ] && rm -rf /usr/local/share/man/man1/bm.1
+  [ -f "/usr/local/share/man/man1/bm.1.gz" ] && rm -rf /usr/local/share/man/man1/bm.1.gz
+  [ -f "/usr/share/man/man1/bm.1" ] && rm -rf /usr/share/man/man1/bm.1
+  [ -f "/usr/share/man/man1/bm.1.gz" ] && rm -rf /usr/share/man/man1/bm.1.gz
+  [ -x "$(command -v mandb)" ] && mandb
+  rm -rf $HERE/*
+  killall bm-server
+
+elif [ "$SUBCOMMAND" = "update" ]; then
+
+  ##############################################################################
+  ################################## bm update #################################
+  ##############################################################################
+
+  if [[ $EUID -ne 0 ]]; then
+    echo "  This script must be run as root" 
+    exit 1
+  fi
+  cd $HERE
+  CURR_PACKAGE_VERSION=$(curl -s https://raw.githubusercontent.com/Pamblam/browser-mirror/master/package.json \
+    | grep version \
+    | head -1 \
+    | awk -F: '{ print $2 }' \
+    | sed 's/[",]//g' \
+    | tr -d '[[:space:]]')
+  THIS_PACKAGE_VERSION=$(cat $HERE/node_modules/browser-mirror/package.json \
+    | grep version \
+    | head -1 \
+    | awk -F: '{ print $2 }' \
+    | sed 's/[",]//g' \
+    | tr -d '[[:space:]]')
+  LATEST_VERSION=$(echo  "$THIS_PACKAGE_VERSION
+$CURR_PACKAGE_VERSION" | sort -t '.' -k 1,1 -k 2,2 -k 3,3 -g -r | head -1)
+  if [ "$LATEST_VERSION" = "$THIS_PACKAGE_VERSION" ]; then
+    echo "  Browser-Mirror is up to date."
+  else
+    [ -f /etc/profile ] && grep -v "$HERE" /etc/profile > temp && mv temp /etc/profile > /dev/null 2>&1
+    [ -f "/usr/local/share/man/man1/bm.1" ] && rm -rf /usr/local/share/man/man1/bm.1
+    [ -f "/usr/local/share/man/man1/bm.1.gz" ] && rm -rf /usr/local/share/man/man1/bm.1.gz
+    [ -f "/usr/share/man/man1/bm.1" ] && rm -rf /usr/share/man/man1/bm.1
+    [ -f "/usr/share/man/man1/bm.1.gz" ] && rm -rf /usr/share/man/man1/bm.1.gz
+    [ -x "$(command -v mandb)" ] && mandb > /dev/null 2>&1
+    rm -rf $HERE/*
+    killall bm-server > /dev/null 2>&1
+    source /dev/stdin <<< "$(curl -s https://raw.githubusercontent.com/Pamblam/browser-mirror/master/installer)"
+    cd $PWD
+  fi
+
+elif [ "$SUBCOMMAND" = "server" ]; then
+
+  if [ "$OPERATIVE" = "start" ]; then
+
+    ############################################################################
+    ####################### bm server start [portnumber] #######################
+    ############################################################################
+
+	if pgrep -x "bm-server" > /dev/null; then
+	  echo "  BM Server is already running"
+	else 
+	  PORT=$3
+      # Default port to 1337 if one isn't supplied
+      if [ -z "$PORT" ]; then
+        PORT=1337 
+      fi
+      # Make sure the port number is a number
+      if [[ -n ${PORT//[0-9]/} ]]; then
+        echo "  Invalid port number: $PORT"
+        exit 1
+      fi
+      # Get a list of in-use ports and check to see if our port is listed
+      SAFE_PORT=1
+      for p in $(netstat -ant | sed -e '/^tcp/ !d' -e 's/^[^ ]* *[^ ]* *[^ ]* *.*[\.:]\([0-9]*\) .*$/\1/' | sort -g | uniq); 
+        do [ "$p" = "$PORT" ] && SAFE_PORT=0; 
+      done
+      # exit if port is in use
+      if [ "$SAFE_PORT" = 0 ]; then
+        echo "  PORT $PORT is in use"
+        exit 1;
+      fi
+      # Server is not running, port is good, start it up
+      nohup "$HERE/bm-server" $PORT > "$HERE/logs.txt" 2>&1 &
+      echo "  BM Server running on port $PORT"
+	fi
+
+  elif [ "$OPERATIVE" = "stop" ]; then
+
+    ############################################################################
+    ############################## bm server stop ##############################
+    ############################################################################
+
+	if pgrep -x "bm-server" > /dev/null; then
+		killall bm-server 2>&1 &
+		echo "  BM Server stopped"
+	else
+		echo "  BM Server is not running"
+	fi
+
+  elif [ "$OPERATIVE" = "logs" ]; then
+    
+    ############################################################################
+    ############################## bm server logs ##############################
+    ############################################################################
+
+    cat $HERE/logs.txt
+
+  elif [ "$OPERATIVE" = "status" ]; then
+    
+    ############################################################################
+    ############################# bm server status #############################
+    ############################################################################
+
+	if pgrep -x "bm-server" > /dev/null; then
+		echo "  BM Server is running"
+	else
+		echo "  BM Server is not running"
+	fi
+
+  else
+
+    ############################################################################
+    ############################## unknown option ##############################
+    ############################################################################
+
+    echo "  unknown option: $OPERATIVE"
+    echo "  try 'bm --help' for usage help."
+  fi
+
+elif [ "$SUBCOMMAND" = "client" ]; then
+
+  if [ "$OPERATIVE" = "install" ]; then
+
+    ############################################################################
+    ################## bm client install /path/to/install/to ###################
+    ############################################################################
+
+    if [ ! -d $3 ]; then
+      echo "  $3 is not a directory"
+    else
+      cat "$HERE/node_modules/browser-mirror/bm-client.js" > "$3/bm-client.js"
+      echo "  Installed bm-client.js to $3/bm-client.js"
+    fi
+
+  else
+
+    ############################################################################
+    ############################## unknown option ##############################
+    ############################################################################
+
+    echo "  unknown option: $OPERATIVE"
+    echo "  try 'bm --help' for usage help."
+  fi
+
+elif [ "$SUBCOMMAND" = "--help" ]; then
+
+  ##############################################################################
+  ################################# bm --help ##################################
+  ##############################################################################
+
+  echo "  Report bugs to: https://github.com/Pamblam/browser-mirror/issues"
+  echo "  pkg home page: https://github.com/Pamblam/browser-mirror"
+  echo "  Usage: man bm"
+
+elif [ "$SUBCOMMAND" = "--version" ]; then
+
+  ##############################################################################
+  ############################### bm --version #################################
+  ##############################################################################
+
+  echo "  v1.2.7"
+
+else 
+
+  ##############################################################################
+  ############################## unknown option ################################
+  ##############################################################################
+
+  echo "  unknown option: $SUBCOMMAND"
+  echo "  try 'bm --help' or 'man bm' for usage help."
+
+fi
